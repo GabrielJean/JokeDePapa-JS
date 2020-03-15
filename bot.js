@@ -3,7 +3,10 @@ const { Client, MessageEmbed } = require('discord.js');
 const client = new Client();
 const fs = require('fs');
 
+const files = fs.readdirSync('./Audio');
+
 client.on('ready', () => {
+  // eslint-disable-next-line no-console
   console.log(`Logged in as ${client.user.tag}!`);
 });
 
@@ -21,7 +24,6 @@ client.on('message', async (message) => {
   if (message.content === '!joke') {
     // Only try to join the sender's voice channel if they are in one themselves
     if (message.member.voice.channel) {
-      const { channel } = message.member.voice;
       const file = files[Math.floor(Math.random() * files.length)];
       const connection = await message.member.voice.channel.join();
       const dispatcher = await connection.play(`./Audio/${file}`);
@@ -29,6 +31,7 @@ client.on('message', async (message) => {
         try {
           message.member.voice.channel.leave();
         } catch (error) {
+          // eslint-disable-next-line no-console
           console.log(error);
         }
       });
@@ -54,7 +57,8 @@ client.on('message', async (message) => {
   if (message.content === '!leave') {
     // Only try to join the sender's voice channel if they are in one themselves
     if (message.member.voice.channel) {
-      const connection = await message.member.voice.channel.leave();
+      // eslint
+      await message.member.voice.channel.leave();
     }
   }
 
@@ -77,5 +81,5 @@ client.on('message', async (message) => {
   }
 });
 
-var files = fs.readdirSync('./Audio');
+
 client.login('NTMwODUzNDc2MTAwNjAzOTE0.Xm5UgQ.6a8g854-pG5nsjY-ICrgNwX7ndw');
