@@ -1,5 +1,6 @@
-const Discord = require('discord.js');
-const client = new Discord.Client();
+const { Client, MessageEmbed } = require('discord.js');
+const client = new Client();
+const fs = require('fs');
 
 client.on('ready', () => {
   console.log(`Logged in as ${client.user.tag}!`);
@@ -19,9 +20,24 @@ client.on('message', async message => {
     if (message.content === '!joke') {
       // Only try to join the sender's voice channel if they are in one themselves
       if (message.member.voice.channel) {
+        var file = files[Math.floor(Math.random() * files.length)]
         const connection = await message.member.voice.channel.join();
-        const dispatcher = await connection.play('./Audio/canibale.flac');
-        
+        const dispatcher = await connection.play('./Audio/'+ file);
+        dispatcher.on("finish", () => {
+            message.member.voice.channel.leave();
+        })
+        const embed = new MessageEmbed()
+        // Set the title of the field
+        .setTitle('Joke De Papa')
+        // Set the color of the embed
+        .setColor(0x00BCFF)
+        // Set the main content of the embed
+        .setFooter("Tout droit réservés à Gaboom Films")
+        .addField("Blague : ", file.replace(".flac", ""))
+        //Set the thumbnail of the embed
+        .setThumbnail("https://cdn.shoplightspeed.com/shops/612132/files/6072039/randolph-jokes-de-papa-le-jeu-de-societe.jpg");
+      // Send the embed to the same channel as the message
+      message.channel.send(embed);
       } else {
         message.reply('You need to join a voice channel first!');
       }
@@ -31,10 +47,9 @@ client.on('message', async message => {
         // Only try to join the sender's voice channel if they are in one themselves
         if (message.member.voice.channel) {
           const connection = await message.member.voice.channel.leave();
-        } else {
-          message.reply('You need to join a voice channel first!');
         }
       }
   });
 
+var files = fs.readdirSync("./Audio");
 client.login('NTMwODUzNDc2MTAwNjAzOTE0.Xm43gw.Wa2Eyk2r814AZpdaSE0HzhzdxUw');
