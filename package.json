@@ -8,9 +8,22 @@
     "discord.js": "^12.0.2",
     "ffmpeg-static": "^4.0.1"
   },
-  "devDependencies": {},
+  "devDependencies": {
+    "eslint": "^6.8.0",
+    "eslint-config-airbnb-base": "^14.1.0",
+    "eslint-config-prettier": "^6.7.0",
+    "eslint-plugin-import": "^2.20.1",
+    "eslint-plugin-prettier": "^3.1.2",
+    "nodemon": "^2.0.2",
+    "prettier": "^1.19.1"
+  },
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "start": "nodemon app.js",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write \"**/*.+(js|json)\" ",
+    "format:fix": "prettier --write \"**/*.+(js|json)\"  --fix",
+    "test": "newman run test/Api-validation.postman_collection.json"
   },
   "repository": {
     "type": "git",
