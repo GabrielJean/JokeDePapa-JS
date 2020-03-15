@@ -1,13 +1,8 @@
-
 FROM node:12.13.1
 WORKDIR /home/node
 COPY . /home/node
 
 # Set environment varibles
 ENV TZ America/Toronto
-ENV NODE_ENV production
 
-# Install dependecies 
-RUN npm install --production
-# CMD ["/bin/sh", "entrypoint.sh"]
-CMD ["node", "bot.js"]
+CMD ["/bin/sh", "entrypoint.sh"]
