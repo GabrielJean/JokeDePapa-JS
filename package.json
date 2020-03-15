@@ -1,0 +1,23 @@
+{
+  "name": "jokedepapa-js",
+  "version": "0.0.1",
+  "description": "",
+  "main": "bot.js",
+  "dependencies": {
+    "discord.js": "^12.0.2"
+  },
+  "devDependencies": {},
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/GabrielJean/JokeDePapa-JS.git"
+  },
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/GabrielJean/JokeDePapa-JS/issues"
+  },
+  "homepage": "https://github.com/GabrielJean/JokeDePapa-JS#readme"
+}
