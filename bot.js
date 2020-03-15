@@ -68,4 +68,4 @@ client.on('message', async message => {
   });
 
 var files = fs.readdirSync("./Audio");
-client.login('NTMwODUzNDc2MTAwNjAzOTE0.Xm43gw.Wa2Eyk2r814AZpdaSE0HzhzdxUw');
+client.login('NTMwODUzNDc2MTAwNjAzOTE0.Xm5M5A.muWr8IPBEv2kPUSTvkYcY0QYBZA');
