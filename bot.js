@@ -81,7 +81,7 @@ client.on('message', async (message) => {
   }
 });
 
-settings = fs.readFileSync("settings.json", "utf8")
+settings = fs.readFileSync("setting.json", "utf8")
 settings = JSON.parse(settings)
 const token = settings["token"]
 client.login(token);
