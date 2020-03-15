@@ -8,7 +8,7 @@ client.on('ready', () => {
 
 client.on('message', msg => {
   if (msg.content === 'ping') {
-    msg.reply('pong');
+    msg.reply('Pong !');
   }
 });
 
@@ -39,7 +39,7 @@ client.on('message', async message => {
       // Send the embed to the same channel as the message
       message.channel.send(embed);
       } else {
-        message.reply('You need to join a voice channel first!');
+        message.reply('Vous devez être dans un voice channel pour faire cela');
       }
     }
 
@@ -49,6 +49,22 @@ client.on('message', async message => {
           const connection = await message.member.voice.channel.leave();
         }
       }
+
+    if (message.content === '!help') {
+        const embed = new MessageEmbed()
+        // Set the title of the field
+        .setTitle('Commandes :')
+        // Set the color of the embed
+        .setColor(0x00BCFF)
+        // Set the main content of the embed
+        .addField("!help", "Affiche ce message")
+        .addField("!joke", "Joue une blague")
+        .addField("!ping", "Pong !")
+        //Set the thumbnail of the embed
+        .setThumbnail("https://cdn.shoplightspeed.com/shops/612132/files/6072039/randolph-jokes-de-papa-le-jeu-de-societe.jpg");
+      // Send the embed to the same channel as the message
+      message.channel.send(embed);
+    }
   });
 
 var files = fs.readdirSync("./Audio");
