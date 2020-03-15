@@ -81,5 +81,7 @@ client.on('message', async (message) => {
   }
 });
 
-
-client.login('NTMwODUzNDc2MTAwNjAzOTE0.Xm5UgQ.6a8g854-pG5nsjY-ICrgNwX7ndw');
+settings = fs.readFileSync("setting.json", "utf8")
+settings = JSON.parse(settings)
+const token = settings["token"]
+client.login(token);
