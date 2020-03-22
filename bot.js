@@ -8,15 +8,15 @@ const fs = require('fs');
 const files = fs.readdirSync('./Audio');
 
 
-async function mgmConsole() {
-  prompt.get(['command'], function (err, result) {
-    if (err) { return onErr(err); }
-    if (result.command === "kill") {
-      process.kill()
-    }
-    mgmConsole()
-  });
-}
+// async function mgmConsole() {
+//   prompt.get(['command'], function (err, result) {
+//     if (err) { return onErr(err); }
+//     if (result.command === "kill") {
+//       process.kill()
+//     }
+//     mgmConsole()
+//   });
+// }
 
 client.on('ready', () => {
   // eslint-disable-next-line no-console
@@ -27,6 +27,7 @@ client.on('ready', () => {
 client.on('message', (msg) => {
   if (msg.content === 'ping') {
     msg.reply('Pong !');
+    console.log("User " + message.member.user.tag + " from : " + message.guild.name + ", triggered : " + command )
   }
 });
 
@@ -41,6 +42,7 @@ client.on('message', async (message) => {
   const command = args.shift().toLowerCase();
 
   if (command === 'joke') {
+    console.log("User " + message.member.user.tag + " from : " + message.guild.name + ", triggered : " + command )
     // Only try to join the sender's voice channel if they are in one themselves
     if (message.member.voice.channel) {
       const file = files[Math.floor(Math.random() * files.length)];
@@ -82,6 +84,7 @@ client.on('message', async (message) => {
   }
 
   if(command === "say") {
+    console.log("User " + message.member.user.tag + " from : " + message.guild.name + ", triggered : " + command )
     // makes the bot say something and delete the message. As an example, it's open to anyone to use. 
     // To get the "message" itself we join the `args` back into a string with spaces: 
     if (message === ""){return}
@@ -112,7 +115,7 @@ client.on('message', async (message) => {
   }
 });
 
-setTimeout(function () {
-  mgmConsole(); 
-}, 1000);
+// setTimeout(function () {
+//   mgmConsole(); 
+// }, 1000);
 client.login(config.token)
