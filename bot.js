@@ -21,7 +21,7 @@ const files = fs.readdirSync('./Audio');
 client.on('ready', () => {
   // eslint-disable-next-line no-console
   console.log(`Logged in as ${client.user.tag}!`);
-  client.user.setPresence({ activity: { name: 'type !help' }})
+  client.user.setPresence({ activity: { name: 'Type !help' }})
 });
 
 client.on('message', (msg) => {
