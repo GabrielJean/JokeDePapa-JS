@@ -1,121 +1,145 @@
-const { Client, MessageEmbed } = require('discord.js');
+const { Client, GatewayIntentBits, Partials, EmbedBuilder } = require('discord.js');
+const { joinVoiceChannel, createAudioPlayer, createAudioResource, AudioPlayerStatus, entersState, VoiceConnectionStatus } = require('@discordjs/voice');
 const prompt = require('prompt');
 const config = require("./config.json");
-
-const client = new Client();
 const fs = require('fs');
+const path = require('path');
 
 const files = fs.readdirSync('./Audio');
 
+const client = new Client({
+  intents: [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.MessageContent,
+    GatewayIntentBits.GuildVoiceStates,
+  ],
+  partials: [Partials.Channel],
+});
 
-// async function mgmConsole() {
-//   prompt.get(['command'], function (err, result) {
-//     if (err) { return onErr(err); }
-//     if (result.command === "kill") {
-//       process.kill()
-//     }
-//     mgmConsole()
-//   });
-// }
-
-client.on('ready', () => {
-  // eslint-disable-next-line no-console
+client.once('ready', () => {
   console.log(`Logged in as ${client.user.tag}!`);
-  client.user.setPresence({ activity: { name: 'Type !help' }})
+  client.user.setPresence({ activities: [{ name: 'Type !help' }] });
 });
 
-client.on('message', (msg) => {
-  if (msg.content === 'ping') {
-    msg.reply('Pong !');
-    console.log("User " + message.member.user.tag + " from : " + message.guild.name + ", triggered : " + command )
-  }
-});
-
-client.on('message', async (message) => {
-  // Voice only works in guilds, if the message does not come from a guild,
-  // we ignore it
+client.on('messageCreate', async (message) => {
+  if (message.author.bot) return;
   if (!message.guild) return;
 
-  if(message.content.indexOf(config.prefix) !== 0) return;
+  if (message.content === 'ping') {
+    await message.reply('Pong !');
+    console.log(
+      "User " +
+        message.member.user.tag +
+        " from : " +
+        message.guild.name +
+        ", triggered : ping"
+    );
+    return;
+  }
+
+  if (!message.content.startsWith(config.prefix)) return;
 
   const args = message.content.slice(config.prefix.length).trim().split(/ +/g);
   const command = args.shift().toLowerCase();
 
   if (command === 'joke') {
-    console.log("User " + message.member.user.tag + " from : " + message.guild.name + ", triggered : " + command )
-    // Only try to join the sender's voice channel if they are in one themselves
+    console.log(
+      "User " +
+        message.member.user.tag +
+        " from : " +
+        message.guild.name +
+        ", triggered : " +
+        command
+    );
     if (message.member.voice.channel) {
       const file = files[Math.floor(Math.random() * files.length)];
-      const connection = await message.member.voice.channel.join();
-      const dispatcher = await connection.play(`./Audio/${file}`);
-      dispatcher.on('finish', () => {
-        try {
-          message.member.voice.channel.leave();
-        } catch (error) {
-          // eslint-disable-next-line no-console
-          console.log(error);
-        }
-      });
-      const embed = new MessageEmbed()
-        // Set the title of the field
-        .setTitle('Joke De Papa')
-        // Set the color of the embed
-        .setColor(0x00bcff)
-        // Set the main content of the embed
-        .setFooter('Tout droit réservés à Gaboom Films')
-        .addField('Blague : ', file.replace('.flac', ''))
-        // Set the thumbnail of the embed
-        .setThumbnail(
-          'https://cdn.shoplightspeed.com/shops/612132/files/6072039/randolph-jokes-de-papa-le-jeu-de-societe.jpg',
-        );
-      // Send the embed to the same channel as the message
-      message.channel.send(embed);
+      const filePath = path.join(__dirname, 'Audio', file);
+      try {
+        const connection = joinVoiceChannel({
+          channelId: message.member.voice.channel.id,
+          guildId: message.guild.id,
+          adapterCreator: message.guild.voiceAdapterCreator,
+        });
+
+        await entersState(connection, VoiceConnectionStatus.Ready, 30_000);
+
+        const player = createAudioPlayer();
+        const resource = createAudioResource(filePath);
+
+        connection.subscribe(player);
+        player.play(resource);
+
+        player.once(AudioPlayerStatus.Idle, () => {
+          connection.destroy();
+        });
+
+        const embed = new EmbedBuilder()
+          .setTitle('Joke De Papa')
+          .setColor(0x00bcff)
+          .setFooter({ text: 'Tout droit réservés à Gaboom Films' })
+          .addFields({ name: 'Blague : ', value: file.replace('.flac', '') })
+          .setThumbnail(
+            'https://cdn.shoplightspeed.com/shops/612132/files/6072039/randolph-jokes-de-papa-le-jeu-de-societe.jpg'
+          );
+        await message.channel.send({ embeds: [embed] });
+      } catch (err) {
+        await message.reply('Erreur lors de la lecture de la blague.');
+        console.log(err);
+      }
     } else {
-      message.reply('Vous devez être dans un voice channel pour faire cela');
+      await message.reply('Vous devez être dans un voice channel pour faire cela');
     }
+    return;
   }
 
-  if (command === "leave") {
-    // Only try to join the sender's voice channel if they are in one themselves
+  if (command === 'leave') {
     if (message.member.voice.channel) {
-      // eslint
-      await message.member.voice.channel.leave();
+      try {
+        // Find and destroy the connection for this guild
+        const connection = require('@discordjs/voice').getVoiceConnection(message.guild.id);
+        if (connection) connection.destroy();
+      } catch (err) {
+        console.log(err);
+      }
     }
+    return;
   }
 
-  if(command === "say") {
-    console.log("User " + message.member.user.tag + " from : " + message.guild.name + ", triggered : " + command )
-    // makes the bot say something and delete the message. As an example, it's open to anyone to use. 
-    // To get the "message" itself we join the `args` back into a string with spaces: 
-    if (message === ""){return}
+  if (command === 'say') {
+    console.log(
+      "User " +
+        message.member.user.tag +
+        " from : " +
+        message.guild.name +
+        ", triggered : " +
+        command
+    );
+    if (args.length === 0) return;
     const sayMessage = args.join(" ");
-    // Then we delete the command message (sneaky, right?). The catch just ignores the error with a cute smiley thing.
-    message.delete().catch(O_o=>{}); 
-    // And we get the bot to say the thing: 
-    message.channel.send(sayMessage);
+    try {
+      await message.delete();
+    } catch (err) {}
+    await message.channel.send(sayMessage);
+    return;
   }
 
   if (command === 'help') {
-    const embed = new MessageEmbed()
-      // Set the title of the field
+    const embed = new EmbedBuilder()
       .setTitle('Commandes :')
-      // Set the color of the embed
       .setColor(0x00bcff)
-      // Set the main content of the embed
-      .addField('!help', 'Affiche ce message')
-      .addField('!joke', 'Joue une blague')
-      .addField('!ping', 'Pong !')
-      .addField('!say', 'Le bot affiche un message')
-      // Set the thumbnail of the embed
+      .addFields(
+        { name: '!help', value: 'Affiche ce message' },
+        { name: '!joke', value: 'Joue une blague' },
+        { name: '!ping', value: 'Pong !' },
+        { name: '!say', value: 'Le bot affiche un message' }
+      )
       .setThumbnail(
-        'https://cdn.shoplightspeed.com/shops/612132/files/6072039/randolph-jokes-de-papa-le-jeu-de-societe.jpg',
+        'https://cdn.shoplightspeed.com/shops/612132/files/6072039/randolph-jokes-de-papa-le-jeu-de-societe.jpg'
       );
-    // Send the embed to the same channel as the message
-    message.channel.send(embed);
+    await message.channel.send({ embeds: [embed] });
+    return;
   }
 });
 
-// setTimeout(function () {
-//   mgmConsole(); 
-// }, 1000);
-client.login(config.token)
+client.login(config.token);
