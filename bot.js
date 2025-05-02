@@ -75,13 +75,10 @@ client.on('messageCreate', async (message) => {
         });
 
         const embed = new EmbedBuilder()
-          .setTitle('Joke De Papa')
+          .setTitle('Joke De Jean')
           .setColor(0x00bcff)
-          .setFooter({ text: 'Tout droit réservés à Gaboom Films' })
+          .setFooter({ text: 'Tout droit réservés à Jean' })
           .addFields({ name: 'Blague : ', value: file.replace('.flac', '') })
-          .setThumbnail(
-            'https://cdn.shoplightspeed.com/shops/612132/files/6072039/randolph-jokes-de-papa-le-jeu-de-societe.jpg'
-          );
         await message.channel.send({ embeds: [embed] });
       } catch (err) {
         await message.reply('Erreur lors de la lecture de la blague.');
@@ -134,9 +131,6 @@ client.on('messageCreate', async (message) => {
         { name: '!ping', value: 'Pong !' },
         { name: '!say', value: 'Le bot affiche un message' }
       )
-      .setThumbnail(
-        'https://cdn.shoplightspeed.com/shops/612132/files/6072039/randolph-jokes-de-papa-le-jeu-de-societe.jpg'
-      );
     await message.channel.send({ embeds: [embed] });
     return;
   }
