@@ -1,11 +1,23 @@
-FROM node:18-slim
-WORKDIR /home/node
-COPY . /home/node
+FROM python:3.12-slim
 
-# Install Python and build tools for node-gyp
-RUN apt-get update && apt-get install -y python3 make g++ && rm -rf /var/lib/apt/lists/*
+# Install ffmpeg and other dependencies
+RUN apt-get update && \
+    apt-get install -y ffmpeg && \
+    rm -rf /var/lib/apt/lists/*
 
-# Set environment varibles
-ENV TZ America/Toronto
+# Set work directory
+WORKDIR /app
 
-CMD ["/bin/sh", "entrypoint.sh"]
+# Copy requirements and install Python dependencies
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy the rest of the code
+COPY . .
+
+# Set environment variables (optional, for UTF-8 support)
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONIOENCODING=UTF-8
+
+# Run the bot
+CMD ["python", "bot.py"]
