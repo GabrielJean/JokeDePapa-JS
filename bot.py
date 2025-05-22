@@ -351,7 +351,9 @@ async def gpt(interaction: discord.Interaction, query: str):
     tts_url = config["tts_url"]
     await interaction.response.defer(thinking=True)
     reply = azure_gpt_chat(query, azure_gpt_url, azure_api_key, gpt_system_prompt)
-    await interaction.followup.send(f"**Q:** {query}\n**GPT:** {reply}")
+    # Enhanced formatting for better readability
+    formatted = f"**Q :** {query}\n**GPT :**\n```{reply}```"
+    await interaction.followup.send(formatted)
     tts_message = reply[:500] if reply else ""
     if interaction.user.voice and interaction.user.voice.channel and reply:
         with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as tmpfile:
@@ -384,7 +386,7 @@ async def help(interaction: discord.Interaction):
     embed.add_field(name="/ping", value="Pong !", inline=False)
     embed.add_field(name="/leave", value="Forcer le bot à quitter le vocal.", inline=False)
     embed.add_field(name="/say_tc <texte>", value="Affiche le texte dans le channel", inline=False)
-    embed.add_field(name="/say_vc <texte>", value="TTS accent québécois (instructions configurables pour tous)", inline=False)
+    embed.add_field(name="/say_vc <texte>", value="TTS accent québécois (instructions configurables)", inline=False)
     embed.add_field(name="/say_vc_instructions <texte>", value="Change instructions TTS de /say_vc", inline=False)
     embed.add_field(name="/say_vc_noir <texte>", value="TTS accent africain noir francophone", inline=False)
     embed.add_field(name="/gpt <question>", value="Question à GPT-4o (Azure), vocal et texte", inline=False)
