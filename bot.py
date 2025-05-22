@@ -148,7 +148,7 @@ def azure_gpt_chat(query, azure_gpt_url, azure_api_key, system_prompt):
         logging.error(f"Azure GPT network error: {ex}")
         return "Erreur : impossible de contacter Azure OpenAI."
 
-bot = commands.Bot(command_prefix="!", intents=intents)  # <=== important !
+bot = commands.Bot(command_prefix="!", intents=intents)
 
 async def reset_gpt_prompt_after_delay():
     global gpt_system_prompt, gpt_prompt_reset_task
@@ -351,9 +351,26 @@ async def gpt(interaction: discord.Interaction, query: str):
     tts_url = config["tts_url"]
     await interaction.response.defer(thinking=True)
     reply = azure_gpt_chat(query, azure_gpt_url, azure_api_key, gpt_system_prompt)
-    # Enhanced formatting for better readability
-    formatted = f"**Q :** {query}\n**GPT :**\n```{reply}```"
-    await interaction.followup.send(formatted)
+
+    # Formatting answer as an embed "box", splits into multiple fields if needed
+    embed = discord.Embed(
+        title="Réponse GPT-4o",
+        color=0x00bcff,
+        description=f"**Q :** {query}"
+    )
+    maxlen = 1024
+    chunks = [reply[i:i+maxlen] for i in range(0, len(reply), maxlen)]
+    for idx, chunk in enumerate(chunks[:25]):
+        name = "Réponse" if idx == 0 else f"(suite {idx})"
+        embed.add_field(name=name, value=chunk, inline=False)
+    if len(chunks) > 25:
+        embed.add_field(
+            name="Info",
+            value="(réponse tronquée, trop longue pour Discord !)",
+            inline=False
+        )
+    await interaction.followup.send(embed=embed)
+
     tts_message = reply[:500] if reply else ""
     if interaction.user.voice and interaction.user.voice.channel and reply:
         with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as tmpfile:
