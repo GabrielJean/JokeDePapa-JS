@@ -399,8 +399,8 @@ async def help(interaction: discord.Interaction):
     embed.add_field(name="/say_vc_instructions <texte>", value="(admin) Change instructions TTS de /say_vc", inline=False)
     embed.add_field(name="/say_vc_noir <texte>", value="TTS accent africain noir francophone", inline=False)
     embed.add_field(name="/gpt <question>", value="Question à GPT-4o (Azure), vocal et texte", inline=False)
-    embed.add_field(name="/gpt_prompt <texte>", value="(admin) Change le prompt système pour /gpt", inline=False)
-    embed.set_footer(text="Blagues issues de /r/jokes, /r/dadjokes, /r/darkjokes")
+    embed.add_field(name="/gpt_prompt <texte>", value="Change le prompt système pour /gpt", inline=False)
+    embed.set_footer(text="Tous droits réservés à Jean"
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 @bot.event
