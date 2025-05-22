@@ -12,7 +12,6 @@ import math
 from collections import defaultdict
 
 # -------- CONFIG & GLOBALS --------
-
 with open("config.json", "r") as f:
     config = json.load(f)
 
@@ -21,10 +20,8 @@ gpt_system_prompt_default = config.get(
     "You are a helpful assistant. Reply in the language in which the question is asked, either English or French."
 )
 gpt_system_prompt = gpt_system_prompt_default
-
 say_vc_instructions_default = config.get("say_vc_instructions", "Utilise un accent québécois")
 say_vc_instructions = say_vc_instructions_default
-
 gpt_prompt_reset_task = None
 sayvc_reset_task = None
 
@@ -49,11 +46,9 @@ logging.basicConfig(
 REDDIT_SUBREDDITS = ["darkjokes", "jokes", "dadjokes"]
 REDDIT_MAX_LENGTH = 300
 REDDIT_HEADERS = {"User-Agent": "Mozilla/5.0"}
-
 reddit_jokes_by_sub = defaultdict(list)
 
 # -------- UTILS --------
-
 async def fetch_all_jokes_async(url, headers, max_posts=1000):
     loop = asyncio.get_event_loop()
     def fetch():
@@ -336,13 +331,10 @@ async def say_vc_noir(interaction: discord.Interaction, message: str):
     else:
         await interaction.response.send_message("Vous devez être dans un voice channel.", ephemeral=True)
 
-@bot.tree.command(description="Modifie les instructions TTS pour /say_vc (admin seulement)")
+@bot.tree.command(description="Modifie les instructions TTS pour /say_vc (tout le monde)")
 @app_commands.describe(instructions="Nouvelles instructions")
 async def say_vc_instructions_cmd(interaction: discord.Interaction, instructions: str):
     global say_vc_instructions, sayvc_reset_task
-    if not interaction.user.guild_permissions.administrator:
-        await interaction.response.send_message("Seuls les admins peuvent faire ça.", ephemeral=True)
-        return
     say_vc_instructions = instructions
     await interaction.response.send_message(f"Nouvelles instructions pour /say_vc :\n```{instructions}```\n(Retour à la valeur par défaut dans 24h)", ephemeral=True)
     logging.info(f"say_vc_instructions updated by {interaction.user}: {instructions}")
@@ -371,13 +363,10 @@ async def gpt(interaction: discord.Interaction, query: str):
             try: os.remove(filename)
             except Exception: pass
 
-@bot.tree.command(description="Modifie le system prompt pour /gpt (admin seulement)")
+@bot.tree.command(description="Modifie le system prompt pour /gpt (tout le monde)")
 @app_commands.describe(prompt="Nouveau prompt système GPT")
 async def gpt_prompt(interaction: discord.Interaction, prompt: str):
     global gpt_system_prompt, gpt_prompt_reset_task
-    if not interaction.user.guild_permissions.administrator:
-        await interaction.response.send_message("Seuls les admins peuvent faire ça.", ephemeral=True)
-        return
     gpt_system_prompt = prompt
     await interaction.response.send_message(f"Nouveau prompt système pour /gpt :\n```{prompt}```\n(Retour à la valeur par défaut dans 24h)", ephemeral=True)
     logging.info(f"gpt system prompt updated by {interaction.user}: {prompt}")
@@ -395,12 +384,12 @@ async def help(interaction: discord.Interaction):
     embed.add_field(name="/ping", value="Pong !", inline=False)
     embed.add_field(name="/leave", value="Forcer le bot à quitter le vocal.", inline=False)
     embed.add_field(name="/say_tc <texte>", value="Affiche le texte dans le channel", inline=False)
-    embed.add_field(name="/say_vc <texte>", value="TTS accent québécois (instructions admin configurables)", inline=False)
-    embed.add_field(name="/say_vc_instructions <texte>", value="(admin) Change instructions TTS de /say_vc", inline=False)
+    embed.add_field(name="/say_vc <texte>", value="TTS accent québécois (instructions configurables pour tous)", inline=False)
+    embed.add_field(name="/say_vc_instructions <texte>", value="Change instructions TTS de /say_vc", inline=False)
     embed.add_field(name="/say_vc_noir <texte>", value="TTS accent africain noir francophone", inline=False)
     embed.add_field(name="/gpt <question>", value="Question à GPT-4o (Azure), vocal et texte", inline=False)
     embed.add_field(name="/gpt_prompt <texte>", value="Change le prompt système pour /gpt", inline=False)
-    embed.set_footer(text="Tous droits réservés à Jean"
+    embed.set_footer(text="Tous droits réservés à Jean")
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 @bot.event
