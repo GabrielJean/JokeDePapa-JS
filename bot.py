@@ -10,6 +10,7 @@ import tempfile
 import logging
 import math
 from collections import defaultdict
+import time  # Pour le système de blocage
 
 with open("config.json", "r") as f:
     config = json.load(f)
@@ -41,9 +42,27 @@ _guild_gpt_prompt_reset_task = {}
 _guild_sayvc_reset_task = {}
 reddit_jokes_by_sub = defaultdict(list)
 
-# FILE D'ATTENTE PLAY AUDIO PAR SERVEUR ↓↓↓
 _voice_audio_queues = defaultdict(asyncio.Queue)
 _voice_locks = defaultdict(asyncio.Lock)
+_vc_blocks = defaultdict(dict)  # (guild_id, channel_id): {user_id: until_ts}
+
+def is_vc_blocked_for_user(guild_id, channel_id, user_list):
+    """Return list of users in user_list that block this VC (clean expired first)."""
+    now = time.time()
+    blocks = _vc_blocks[(guild_id, channel_id)]
+    expired = [uid for uid, until in blocks.items() if until < now]
+    for uid in expired:
+        del blocks[uid]
+    return list(set(blocks.keys()) & set(user_list))
+
+def get_voice_channel(interaction, specified: discord.VoiceChannel = None):
+    if interaction.user.voice and interaction.user.voice.channel:
+        return interaction.user.voice.channel
+    elif specified:
+        perms = specified.permissions_for(interaction.user)
+        if perms.connect and perms.speak:
+            return specified
+    return None
 
 async def fetch_reddit_top(subreddit, headers, max_posts=1000):
     url = f"https://www.reddit.com/r/{subreddit}/top.json?t=year&limit=1000"
@@ -137,19 +156,24 @@ def run_gpt(query, system_prompt):
         logging.error(f"GPT network error: {ex}")
         return "Erreur : impossible de contacter Azure OpenAI."
 
-async def play_audio(interaction, file_path):
+async def play_audio(interaction, file_path, voice_channel):
     if not os.path.exists(file_path):
         raise FileNotFoundError(f"File {file_path} not found.")
-    user = interaction.user
-    if not (user.voice and user.voice.channel):
-        raise RuntimeError("Vous devez être connecté à un salon vocal pour exécuter cette commande.")
     guild = interaction.guild
     gid = guild.id if guild else 0
+
+    # LOGIQUE DE BLOCAGE
+    channel_id = voice_channel.id
+    members_in_channel = [m.id for m in voice_channel.members if not m.bot]
+    blockers = is_vc_blocked_for_user(gid, channel_id, members_in_channel)
+    if blockers:
+        blocked_by = ", ".join(f"<@{uid}>" for uid in blockers)
+        raise RuntimeError(f"Accès refusé : bloqué par {blocked_by}. Attends 2h ou demande à retirer le blocage.")
 
     queue = _voice_audio_queues[gid]
     lock = _voice_locks[gid]
     fut = asyncio.get_event_loop().create_future()
-    await queue.put((file_path, fut, user.voice.channel, interaction))
+    await queue.put((file_path, fut, voice_channel, interaction))
     if not lock.locked():
         asyncio.create_task(_run_audio_queue(guild, queue, lock))
     await fut
@@ -172,7 +196,6 @@ async def _run_audio_queue(guild, queue, lock):
             except Exception as e:
                 fut.set_exception(e)
             finally:
-                # Nettoyage auto fichier temp
                 try:
                     if file_path.startswith(tempfile.gettempdir()) and os.path.exists(file_path):
                         os.remove(file_path)
@@ -211,29 +234,71 @@ async def preload_jokes_task():
     await asyncio.sleep(2)
     reddit_jokes_by_sub = await load_reddit_jokes()
 
-@bot.tree.command(name="ping", description="Renvoie Pong ! (test de connexion)")
+@bot.tree.command(name="ping", description="Renvoie Pong !")
 async def ping(interaction: discord.Interaction):
     await interaction.response.send_message("Pong !", ephemeral=True)
 
-@bot.tree.command(name="jokeqc", description="Joue une blague québécoise (mp3)")
-async def jokeqc(interaction: discord.Interaction):
+@bot.tree.command(name="bloque", description="Bloque le bot pour 2h de rejoindre ton vocal actuel")
+async def bloque(interaction: discord.Interaction):
+    user = interaction.user
+    if not user.voice or not user.voice.channel:
+        await interaction.response.send_message(
+            "Tu dois être dans un salon vocal pour bloquer le bot !", ephemeral=True)
+        return
+    guild = interaction.guild
+    channel = user.voice.channel
+    key = (guild.id, channel.id)
+    _vc_blocks[key][user.id] = time.time() + 2 * 3600
+    await interaction.response.send_message(
+        f"🔒 Le bot ne peux rejoindre **{channel.name}** pour toi pendant 2h. Refais `/bloque` pour prolonger.",
+        ephemeral=True)
+
+@bot.tree.command(name="debloque", description="Enlève ton blocage dans le salon vocal")
+async def debloque(interaction: discord.Interaction):
+    user = interaction.user
+    if not user.voice or not user.voice.channel:
+        await interaction.response.send_message(
+            "Tu dois être dans un salon vocal pour débloquer ce salon !", ephemeral=True)
+        return
+    guild = interaction.guild
+    channel = user.voice.channel
+    key = (guild.id, channel.id)
+    if user.id in _vc_blocks[key]:
+        del _vc_blocks[key][user.id]
+        await interaction.response.send_message(
+            f"✅ Le blocage dans **{channel.name}** est retiré. Le bot peut à nouveau venir.", ephemeral=True)
+    else:
+        await interaction.response.send_message(
+            f"Ce salon n’était pas bloqué par toi !", ephemeral=True)
+
+@bot.tree.command(name="jokeqc", description="Blague québécoise mp3")
+@app_commands.describe(voice_channel="Salon vocal cible (optionnel)")
+async def jokeqc(interaction: discord.Interaction, voice_channel: discord.VoiceChannel = None):
     await interaction.response.defer(thinking=True, ephemeral=True)
     file = random.choice(audio_files)
+    vc_channel = get_voice_channel(interaction, voice_channel)
+    if not vc_channel:
+        await interaction.followup.send(
+            "Vous devez être dans un salon vocal, ou préciser un vocal !", ephemeral=True)
+        return
     try:
-        await asyncio.wait_for(play_audio(interaction, os.path.join(AUDIO_DIR, file)), timeout=30)
+        await asyncio.wait_for(play_audio(interaction, os.path.join(AUDIO_DIR, file), vc_channel), timeout=30)
+    except RuntimeError as exc:
+        await interaction.followup.send(str(exc), ephemeral=True)
     except Exception as exc:
-        msg = "Erreur : le fichier audio n'a pas été trouvé." if isinstance(exc, FileNotFoundError) \
+        msg = "Fichier audio non trouvé." if isinstance(exc, FileNotFoundError) \
                 else f"Erreur pendant la lecture : {exc}"
         await interaction.followup.send(msg, ephemeral=True)
     else:
-        await interaction.followup.send("Lecture audio lancée dans votre salon vocal.", ephemeral=True)
+        await interaction.followup.send("Lecture audio lancée dans le salon vocal.", ephemeral=True)
 
-@bot.tree.command(name="joke", description="Joue une blague Reddit en vocal")
-async def joke(interaction: discord.Interaction):
+@bot.tree.command(name="joke", description="Blague Reddit en vocal")
+@app_commands.describe(voice_channel="Salon vocal cible (optionnel)")
+async def joke(interaction: discord.Interaction, voice_channel: discord.VoiceChannel = None):
     await interaction.response.defer(thinking=True, ephemeral=True)
     global reddit_jokes_by_sub
     if not reddit_jokes_by_sub:
-        await interaction.followup.send("Aucune blague disponible pour le moment. Veuillez réessayer dans quelques secondes.", ephemeral=True)
+        await interaction.followup.send("Aucune blague pour le moment, réessaye plus tard.", ephemeral=True)
         return
     sub = random.choice(list(reddit_jokes_by_sub.keys()))
     posts = reddit_jokes_by_sub[sub]
@@ -242,8 +307,10 @@ async def joke(interaction: discord.Interaction):
     idx = random.choices(range(len(posts)), weights=[w/sum(weights) for w in weights], k=1)[0]
     post = posts[idx]["data"]
     joke_text = f"{post['title']}. {post['selftext']}".strip()
-    if not (interaction.user.voice and interaction.user.voice.channel):
-        await interaction.followup.send("Vous devez être connecté à un salon vocal pour écouter la blague.", ephemeral=True)
+    vc_channel = get_voice_channel(interaction, voice_channel)
+    if not vc_channel:
+        await interaction.followup.send(
+            "Vous devez être dans un salon vocal, ou préciser un vocal !", ephemeral=True)
         return
     with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as tmp:
         filename = tmp.name
@@ -254,7 +321,9 @@ async def joke(interaction: discord.Interaction):
             timeout=20
         )
         if not success: raise Exception("Erreur lors de la génération de la synthèse vocale.")
-        await asyncio.wait_for(play_audio(interaction, filename), timeout=30)
+        await asyncio.wait_for(play_audio(interaction, filename, vc_channel), timeout=30)
+    except RuntimeError as exc:
+        await interaction.followup.send(str(exc), ephemeral=True)
     except Exception as exc:
         await interaction.followup.send(f"Erreur : {exc}", ephemeral=True)
     else:
@@ -263,40 +332,49 @@ async def joke(interaction: discord.Interaction):
         try: os.remove(filename)
         except: pass
 
-@bot.tree.command(name="leave", description="Force le bot à quitter le vocal")
+@bot.tree.command(name="leave", description="Quitte le vocal")
 async def leave(interaction: discord.Interaction):
     await interaction.response.defer(thinking=True, ephemeral=True)
     vc = discord.utils.get(bot.voice_clients, guild=interaction.guild)
     if vc:
         try: await vc.disconnect(force=True)
         except Exception as e:
-            await interaction.followup.send("Erreur lors de la déconnexion du salon vocal.", ephemeral=True)
+            await interaction.followup.send("Erreur de déconnexion.", ephemeral=True)
         else:
             await interaction.followup.send("Je quitte le salon vocal.", ephemeral=True)
     else:
-        await interaction.followup.send("Le bot n'est pas connecté à un salon vocal sur ce serveur.", ephemeral=True)
+        await interaction.followup.send("Le bot n'est pas connecté au vocal.", ephemeral=True)
 
 @bot.tree.command(name="penis", description="Joue un son spécial !")
-async def penis(interaction: discord.Interaction):
+@app_commands.describe(voice_channel="Salon vocal cible (optionnel)")
+async def penis(interaction: discord.Interaction, voice_channel: discord.VoiceChannel = None):
     await interaction.response.defer(thinking=True, ephemeral=True)
     file = os.path.join(AUDIO_DIR, "sort-pas-ton-penis.mp3")
+    vc_channel = get_voice_channel(interaction, voice_channel)
+    if not vc_channel:
+        await interaction.followup.send(
+            "Vous devez être dans un salon vocal, ou préciser un vocal !", ephemeral=True
+        )
+        return
     try:
-        await asyncio.wait_for(play_audio(interaction, file), timeout=30)
+        await asyncio.wait_for(play_audio(interaction, file, vc_channel), timeout=30)
+    except RuntimeError as exc:
+        await interaction.followup.send(str(exc), ephemeral=True)
     except Exception as exc:
-        msg = "Erreur : le fichier audio n'a pas été trouvé." if isinstance(exc, FileNotFoundError) \
+        msg = "Fichier audio non trouvé." if isinstance(exc, FileNotFoundError) \
                 else f"Erreur pendant la lecture : {exc}"
         await interaction.followup.send(msg, ephemeral=True)
     else:
-        await interaction.followup.send("Lecture audio lancée dans votre salon vocal.", ephemeral=True)
+        await interaction.followup.send("Lecture audio lancée dans le salon vocal.", ephemeral=True)
 
-@bot.tree.command(name="say-tc", description="Fait afficher un texte dans le channel")
+@bot.tree.command(name="say-tc", description="Affiche le texte dans le salon texte")
 @app_commands.describe(message="Texte à afficher")
 async def say_tc(interaction: discord.Interaction, message: str):
     await interaction.response.send_message(message)
 
-async def say_with_tts(interaction, message, voice, instructions):
-    if not (interaction.user.voice and interaction.user.voice.channel):
-        await interaction.followup.send("Vous devez être connecté à un salon vocal.", ephemeral=True)
+async def say_with_tts(interaction, message, voice, instructions, voice_channel):
+    if not voice_channel:
+        await interaction.followup.send("Vous devez être dans un salon vocal ou en préciser un.", ephemeral=True)
         return
     with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as tmp:
         filename = tmp.name
@@ -307,29 +385,33 @@ async def say_with_tts(interaction, message, voice, instructions):
             timeout=20
         )
         if not success: raise Exception("Erreur lors de la génération de la synthèse vocale.")
-        await asyncio.wait_for(play_audio(interaction, filename), timeout=30)
+        await asyncio.wait_for(play_audio(interaction, filename, voice_channel), timeout=30)
+    except RuntimeError as exc:
+        await interaction.followup.send(str(exc), ephemeral=True)
     except Exception as exc:
         await interaction.followup.send(f"Erreur : {exc}", ephemeral=True)
     else:
-        await interaction.followup.send("Lecture audio lancée dans votre salon vocal.", ephemeral=True)
+        await interaction.followup.send("Lecture audio lancée dans le salon vocal.", ephemeral=True)
     finally:
         try: os.remove(filename)
         except: pass
 
 @bot.tree.command(
     name="say-vc",
-    description="Fait lire du texte en vocal (accent québécois personnalisable)"
+    description="Lecture TTS en vocal"
 )
 @app_commands.describe(
     message="Texte à lire",
-    instructions="Instructions personnalisées pour cette lecture vocale",
-    sauvegarder_instructions="Si vrai, utiliser ces instructions aussi pour les prochaines lectures sur ce serveur pendant 24h."
+    instructions="Style de la voix (optionnel)",
+    sauvegarder_instructions="Réutiliser le style 24h",
+    voice_channel="Salon vocal cible (optionnel)"
 )
 async def say_vc(
     interaction: discord.Interaction,
     message: str,
     instructions: str = None,
-    sauvegarder_instructions: bool = False
+    sauvegarder_instructions: bool = False,
+    voice_channel: discord.VoiceChannel = None
 ):
     gid = interaction.guild.id if interaction.guild else None
     await interaction.response.defer(thinking=True, ephemeral=True)
@@ -337,23 +419,27 @@ async def say_vc(
         _guild_sayvc_instructions[gid] = instructions
         _cancel_task(_guild_sayvc_reset_task.get(gid))
         _guild_sayvc_reset_task[gid] = asyncio.create_task(_delayed_reset_sayvc(gid))
-        info = "(Les instructions seront utilisées sur ce serveur pendant 24h.)"
+        info = "(Style vocal sauvegardé 24h.)"
     else:
         info = ""
+    vc_channel = get_voice_channel(interaction, voice_channel)
+    if not vc_channel:
+        await interaction.followup.send("Vous devez être dans un salon vocal ou en préciser un.", ephemeral=True)
+        return
     current_instructions = instructions if instructions is not None else _guild_sayvc_instructions[gid]
-    await say_with_tts(interaction, message, "ash", current_instructions)
+    await say_with_tts(interaction, message, "ash", current_instructions, vc_channel)
     if info:
         await interaction.followup.send(info, ephemeral=True)
 
 @bot.tree.command(
     name="gpt",
-    description="Pose une question à GPT-4o Azure et lis la réponse en vocal"
+    description="Pose une question à GPT-4o puis lit la réponse"
 )
 @app_commands.describe(
-    query="Ce que tu demandes à GPT",
-    lecture_vocale="Lire la réponse dans le salon vocal",
-    prompt="Prompt système personnalisé (optionnel)",
-    sauvegarder_prompt="Si vrai, mémoriser ce prompt sur ce serveur pour 24h"
+    query="Question à GPT",
+    lecture_vocale="Lire la réponse en vocal",
+    prompt="Prompt optionnel",
+    sauvegarder_prompt="Sauver ce prompt 24h"
 )
 async def gpt(
     interaction: discord.Interaction,
@@ -367,7 +453,7 @@ async def gpt(
         _guild_gpt_prompt[gid] = prompt
         _cancel_task(_guild_gpt_prompt_reset_task.get(gid))
         _guild_gpt_prompt_reset_task[gid] = asyncio.create_task(_delayed_reset_gpt(gid))
-        info = "(Le prompt GPT sera utilisé sur ce serveur pendant 24h.)"
+        info = "(Prompt GPT sauvegardé 24h.)"
     else:
         info = ""
     system_prompt = prompt if prompt is not None else _guild_gpt_prompt[gid]
@@ -379,7 +465,7 @@ async def gpt(
             timeout=22
         )
     except Exception as ex:
-        await interaction.followup.send(f"Erreur pendant l'appel à GPT : {ex}")
+        await interaction.followup.send(f"Erreur GPT : {ex}", ephemeral=True)
         return
     embed = discord.Embed(title="Réponse GPT-4o", color=0x00bcff, description=f"**Q :** {query}")
     maxlen = 1024
@@ -388,13 +474,17 @@ async def gpt(
         name = "Réponse" if idx == 0 else f"(suite {idx})"
         embed.add_field(name=name, value=chunk, inline=False)
     if len(chunks) > 25:
-        embed.add_field(name="Info", value="(réponse tronquée, trop longue pour Discord !)", inline=False)
+        embed.add_field(name="Info", value="(réponse tronquée, trop longue !)", inline=False)
     await interaction.followup.send(embed=embed)
     if info:
         await interaction.followup.send(info)
-    if lecture_vocale and interaction.user.voice and interaction.user.voice.channel and reply:
+    if lecture_vocale and (interaction.user.voice and interaction.user.voice.channel):
+        vc_channel = interaction.user.voice.channel
+    else:
+        vc_channel = None
+    if lecture_vocale and vc_channel and reply:
         short_reply = reply[:500]
-        instructions = "Lis la réponse comme un assistant vocal naturel avec un ton informatif."
+        instructions = "Lis la réponse d'une voix naturelle avec un ton informatif."
         with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as tmp:
             filename = tmp.name
         try:
@@ -403,7 +493,9 @@ async def gpt(
                 timeout=20
             )
             if success:
-                await asyncio.wait_for(play_audio(interaction, filename), timeout=30)
+                await asyncio.wait_for(play_audio(interaction, filename, vc_channel), timeout=30)
+        except RuntimeError as exc:
+            await interaction.followup.send(str(exc), ephemeral=True)
         except Exception:
             pass
         finally:
@@ -413,60 +505,60 @@ async def gpt(
 
 @bot.tree.command(
     name="roast",
-    description="Fais un roast drôle sur un utilisateur, du plus gentil au plus trash (accent québécois, jamais NSFW) !"
+    description="Roast drôle et custom (1 à 5)"
 )
 @app_commands.describe(
-    cible="L'utilisateur à roaster (mentionne quelqu'un)",
-    intensite="Intensité du roast (1: gentil/soft, 5: salé sans méchanceté réelle !)",
-    details="Infos perso/faits/mèmes à exploiter (ex: toujours en retard, adore le fromage, etc.)"
+    cible="Cible du roast",
+    intensite="Niveau (1: soft, 5: salé)",
+    details="Infos/mèmes à exploiter",
+    voice_channel="Salon vocal cible"
 )
 async def roast(
     interaction: discord.Interaction,
     cible: discord.Member,
     intensite: int = 2,
-    details: str = None
+    details: str = None,
+    voice_channel: discord.VoiceChannel = None
 ):
     intensite = max(1, min(5, intensite))
     noms_intensite = {
-        1: "très doux/gentil (petite taquinerie bon enfant, aucune insulte)",
-        2: "doux mais moqueur (roast sympathique, plus d'énergie)",
-        3: "taquin et grinçant (roast de bar, du mordant mais pas méchant)",
-        4: "très salé, façon roast américain (humour noir mais jamais blessant)",
-        5: "maximum d'audace, punchlines qui piquent vraiment, humour québécois direct."
+        1: "très doux (taquin)",
+        2: "moqueur",
+        3: "grinçant",
+        4: "salé",
+        5: "franc-parler punchy"
     }
     username = cible.display_name if hasattr(cible, "display_name") else str(cible)
     ajout_details = ""
     if details:
-        ajout_details = f" Ces détails doivent absolument être exploités dans le roast : {details}"
-
+        ajout_details = f" Utilise : {details}"
     prompt_gpt = (
-        f"Fais un roast dans un style stand-up québécois, roaste la personne suivante : '{username}'. "
-        f"Le niveau d'audace est {intensite}/5 : {noms_intensite[intensite]}. "
+        f"Fais un roast québécois sur '{username}'. "
+        f"Niveau {intensite}/5 : {noms_intensite[intensite]}. "
         f"{ajout_details} "
-        "Utilise expressions québécoises, accent, humour absurde ou direct, peu de filtre mais toujours dans les limites du respect Discord (jamais d'attaques sur le sexe/race/genre/etc.). 3 à 4 phrases maximum. Donne UNIQUEMENT le roast, sans aucune explication ni préambule, directement le texte drôle."
+        "Humour direct, accent québécois, max 4 phrases, pas d'intro."
     )
-    titre = f"Roast de {username} (accent québécois, niveau {intensite})"
+    titre = f"Roast de {username} (niv. {intensite})"
     await interaction.response.defer(thinking=True)
     loop = asyncio.get_running_loop()
     try:
         texte = await asyncio.wait_for(
             loop.run_in_executor(
                 None, run_gpt, prompt_gpt,
-                "Tu es un humoriste stand-up québécois, tu fais des roasts du plus soft au plus grinçant, toujours franc-parler et drôle."
+                "Stand-up québécois, franc-parler et punch."
             ),
             timeout=18
         )
     except Exception as ex:
         await interaction.followup.send(
-            f"Erreur lors de la génération du roast : {ex}", ephemeral=True
+            f"Erreur génération roast: {ex}", ephemeral=True
         )
         return
     embed = discord.Embed(title=titre, description=texte, color=0xff8800 if intensite < 4 else 0xff0000)
     await interaction.followup.send(embed=embed)
-    if interaction.user.voice and interaction.user.voice.channel:
-        instructions = (
-            "Lis ce roast avec un accent québécois fort et une intonation franche, comme un stand-up qui ne retient pas ses punchlines."
-        )
+    vc_channel = get_voice_channel(interaction, voice_channel)
+    if vc_channel:
+        instructions = "Lis ce roast façon humoriste québécois, franc-parler."
         with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as tmp:
             filename = tmp.name
         try:
@@ -475,113 +567,161 @@ async def roast(
                 timeout=20
             )
             if success:
-                await asyncio.wait_for(play_audio(interaction, filename), timeout=30)
+                await asyncio.wait_for(play_audio(interaction, filename, vc_channel), timeout=30)
+        except RuntimeError as exc:
+            await interaction.followup.send(str(exc), ephemeral=True)
         except Exception as e:
             await interaction.followup.send(f"Erreur audio : {e}", ephemeral=True)
         finally:
             try: os.remove(filename)
             except: pass
-        await interaction.followup.send(
-            "Roast balancé (accent québécois, niveau {}) au vocal !".format(intensite),
-            ephemeral=True)
+        await interaction.followup.send("Roast balancé au vocal!", ephemeral=True)
     else:
-        await interaction.followup.send(
-            "(Connecte-toi à un salon vocal pour l’entendre !)", ephemeral=True)
+        await interaction.followup.send("(Rejoins ou précise un salon vocal !)", ephemeral=True)
 
 @bot.tree.command(
     name="compliment",
-    description="Fais un compliment personnalisé et drôle (accent québécois) !"
+    description="Compliment personnalisé (fun)"
 )
 @app_commands.describe(
-    cible="La personne à complimenter (mentionne quelqu'un)",
-    details="Infos perso à flatter (ex: cuisine, humour, mèmes internes, etc - optionnel)"
+    cible="Ciblé du compliment",
+    details="Infos à flatter",
+    voice_channel="Salon vocal cible"
 )
 async def compliment(
     interaction: discord.Interaction,
     cible: discord.Member,
-    details: str = None
+    details: str = None,
+    voice_channel: discord.VoiceChannel = None
 ):
     username = cible.display_name if hasattr(cible, "display_name") else str(cible)
-    ajout_details = ""
-    if details:
-        ajout_details = f" Focalise le compliment sur ces qualités ou gags : {details}"
+    ajout_details = f" Met en valeur : {details}" if details else ""
     prompt_gpt = (
-        f"Fais un compliment très original, drôle et unique à '{username}', façon stand-up québécois ou ami exubérant."
+        f"Fais un compliment fun à '{username}'."
         f"{ajout_details} "
-        "Utilise du vocabulaire québécois, mets de l'énergie et une pointe d'exagération et d'humour. En 3 à 4 phrases maxi. "
-        "N'ajoute pas d'avertissement, ne commence pas par 'Voici' ou 'Hey', donne directement le compliment."
+        "Accentu humoriste québécois, max 4 phrases."
     )
     titre = f"Compliment pour {username}"
-
     await interaction.response.defer(thinking=True)
     loop = asyncio.get_running_loop()
     try:
         texte = await asyncio.wait_for(
-            loop.run_in_executor(
-                None, run_gpt, prompt_gpt,
-                "Tu es un humoriste stand-up québécois, tu balances des compliments uniques, drôles, maxi accent et énergie."
-            ),
-            timeout=18
-        )
+            loop.run_in_executor(None, run_gpt, prompt_gpt,
+            "Compliments québécois."
+        ),timeout=18)
     except Exception as ex:
         await interaction.followup.send(
-            f"Erreur lors de la génération du compliment : {ex}", ephemeral=True
+            f"Erreur génération compliment: {ex}", ephemeral=True
         )
         return
-
     embed = discord.Embed(title=titre, description=texte, color=0x41d98e)
     await interaction.followup.send(embed=embed)
-    if interaction.user.voice and interaction.user.voice.channel:
-        instructions = (
-            "Lis ce compliment comme un stand-up québécois, accent fort, chaleureux, avec beaucoup d'énergie et d'humour."
-        )
-        with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as tmp:
-            filename = tmp.name
+    vc_channel = get_voice_channel(interaction, voice_channel)
+    if vc_channel:
+        instructions = "Lis ce compliment façon humoriste québécois, émerveillé."
+        with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as tmp: filename = tmp.name
         try:
             success = await asyncio.wait_for(
                 loop.run_in_executor(None, run_tts, texte, filename, "ash", instructions),
                 timeout=20
             )
             if success:
-                await asyncio.wait_for(play_audio(interaction, filename), timeout=30)
+                await asyncio.wait_for(play_audio(interaction, filename, vc_channel), timeout=30)
+        except RuntimeError as exc:
+            await interaction.followup.send(str(exc), ephemeral=True)
         except Exception as e:
             await interaction.followup.send(f"Erreur audio : {e}", ephemeral=True)
         finally:
             try: os.remove(filename)
             except: pass
-        await interaction.followup.send(
-            "Compliment lancé au vocal (accent québécois) !",
-            ephemeral=True)
+        await interaction.followup.send("Compliment lancé au vocal!", ephemeral=True)
     else:
-        await interaction.followup.send(
-            "(Connecte-toi à un salon vocal pour l’entendre !)", ephemeral=True)
+        await interaction.followup.send("(Rejoins ou précise un salon vocal !)", ephemeral=True)
 
-@bot.tree.command(name="help", description="Aide sur les commandes du bot")
+@bot.tree.command(name="help", description="Commandes du bot")
 async def help(interaction: discord.Interaction):
-    embed = discord.Embed(title="Commandes disponibles :", color=0x00bcff)
-    embed.add_field(name="/help", value="Affiche ce message", inline=False)
-    embed.add_field(name="/joke", value="Joue une blague Reddit en vocal", inline=False)
-    embed.add_field(name="/jokeqc", value="Joue une blague québécoise locale", inline=False)
-    embed.add_field(name="/penis", value="Joue un son spécial", inline=False)
-    embed.add_field(name="/ping", value="Pong !", inline=False)
-    embed.add_field(name="/leave", value="Force le bot à quitter le salon vocal.", inline=False)
-    embed.add_field(name="/say-tc <texte>", value="Affiche le texte dans le salon textuel", inline=False)
-    embed.add_field(name="/say-vc <texte>", value="Lecture vocale accent québécois (instructions personnalisables)", inline=False)
-    embed.add_field(name="/gpt <question>", value="Pose une question à GPT-4o (Azure), réponse texte et audio", inline=False)
+    embed = discord.Embed(
+        title="Aide - Commandes du bot",
+        color=0x00bcff,
+        description="La plupart des commandes vocales acceptent `voice_channel` (optionnel)."
+    )
+
     embed.add_field(
-        name="/roast @utilisateur [intensité] [details]",
-        value="Roast public, accent québécois garanti ! 1: gentil, 5: punchlines acérées autorisées mais jamais NSFW.",
+        name="/joke",
+        value="Joue une blague Reddit en vocal.\nParams: voice_channel",
+        inline=False)
+
+    embed.add_field(
+        name="/jokeqc",
+        value="Blague québécoise .mp3.\nParams: voice_channel",
+        inline=False)
+
+    embed.add_field(
+        name="/penis",
+        value="Joue un son spécial.\nParams: voice_channel",
+        inline=False)
+
+    embed.add_field(
+        name="/say-vc",
+        value="Lecture TTS personnalisée.\nParams: message, instructions, sauvegarder_instructions, voice_channel",
+        inline=False)
+
+    embed.add_field(
+        name="/gpt",
+        value="GPT-4o Q&A, réponse lue.\nParams: query, lecture_vocale, prompt, sauvegarder_prompt",
         inline=False
     )
+
     embed.add_field(
-        name="/compliment @utilisateur [details]",
-        value="Compliment public, drôle et affectueux, accent québécois inclus ! Option [details] pour cibler un talent: /compliment @julie 'championne du karaoke'",
+        name="/roast",
+        value="Roast fun, accent québécois !\nParams: cible, intensite, details, voice_channel",
         inline=False
     )
-    embed.set_footer(text="Tous droits réservés à Jean")
+
+    embed.add_field(
+        name="/compliment",
+        value="Compliment drôle/style québécois.\nParams: cible, details, voice_channel",
+        inline=False
+    )
+
+    embed.add_field(
+        name="/bloque",
+        value="Bloque le bot pendant 2h de rejoindre ton salon vocal actuel.",
+        inline=False
+    )
+
+    embed.add_field(
+        name="/debloque",
+        value="Débloque le bot de rejoindre ton salon vocal actuel.",
+        inline=False
+    )
+
+    embed.add_field(
+        name="/leave",
+        value="Fait quitter le salon vocal au bot.",
+        inline=False)
+
+    embed.add_field(
+        name="/say-tc",
+        value="Affiche le texte dans le salon texte. Param: message",
+        inline=False)
+
+    embed.add_field(
+        name="/reset-prompts",
+        value="Reset les prompts/instructions TTS.",
+        inline=False
+    )
+
+    embed.add_field(
+        name="/help",
+        value="Affiche cette aide détaillée.",
+        inline=False
+    )
+
+    embed.set_footer(text="Besoin d’être dans un vocal OU d'utiliser voice_channel=...  Utilisez /bloque pour être tranquille!")
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
-@bot.tree.command(name="reset-prompts", description="Réinitialise immédiatement les prompts et instructions TTS")
+@bot.tree.command(name="reset-prompts", description="Reset prompts et TTS")
 async def reset_prompts(interaction: discord.Interaction):
     await interaction.response.defer(thinking=True, ephemeral=True)
     gid = interaction.guild.id if interaction.guild else None
@@ -592,15 +732,15 @@ async def reset_prompts(interaction: discord.Interaction):
     _cancel_task(_guild_sayvc_reset_task.get(gid))
     _guild_sayvc_reset_task[gid] = None
     await interaction.followup.send(
-        f"Les prompts et instructions ont été réinitialisés sur ce serveur par {interaction.user.mention}. Le prompt GPT et les instructions TTS sont revenus à leur valeur par défaut.",
+        f"Prompts/instructions réinitialisés sur ce serveur.",
         ephemeral=True
     )
     logging.info(f"[{gid}] All prompts/instructions reset by {interaction.user}.")
 
 @bot.event
 async def on_app_command_error(interaction, error):
-    try: await interaction.response.send_message(f"Erreur dans la commande : {error}", ephemeral=True)
-    except: await interaction.followup.send(f"Erreur dans la commande : {error}", ephemeral=True)
+    try: await interaction.response.send_message(f"Erreur commande : {error}", ephemeral=True)
+    except: await interaction.followup.send(f"Erreur commande : {error}", ephemeral=True)
     logging.error(f"Unhandled app command error: {error}")
 
 if __name__ == "__main__":
