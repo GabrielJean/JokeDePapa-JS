@@ -10,8 +10,10 @@ import tempfile
 import logging
 import math
 from collections import defaultdict
+
 with open("config.json", "r") as f:
     config = json.load(f)
+
 AUDIO_DIR = "./Audio"
 REDDIT_SUBREDDITS = ["darkjokes", "jokes", "dadjokes"]
 REDDIT_MAX_LENGTH = 350
@@ -19,22 +21,26 @@ REDDIT_HEADERS = {"User-Agent": "Mozilla/5.0"}
 DEFAULT_GPT_PROMPT = config.get("gpt_system_prompt", "You are a helpful assistant. Reply in the language in which the question is asked, either English or French.")
 DEFAULT_SAYVC_INSTRUCTIONS = config.get("say_vc_instructions", "Utilise un accent québécois")
 audio_files = [f for f in os.listdir(AUDIO_DIR) if f.endswith(".mp3")]
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
     handlers=[logging.FileHandler("bot.log"), logging.StreamHandler()]
 )
+
 intents = discord.Intents.default()
 intents.message_content = True
 intents.guilds = True
 intents.messages = True
 intents.voice_states = True
 bot = commands.Bot(command_prefix="!", intents=intents)
+
 _guild_gpt_prompt = defaultdict(lambda: DEFAULT_GPT_PROMPT)
 _guild_sayvc_instructions = defaultdict(lambda: DEFAULT_SAYVC_INSTRUCTIONS)
 _guild_gpt_prompt_reset_task = {}
 _guild_sayvc_reset_task = {}
 reddit_jokes_by_sub = defaultdict(list)
+
 async def fetch_reddit_top(subreddit, headers, max_posts=1000):
     url = f"https://www.reddit.com/r/{subreddit}/top.json?t=year&limit=1000"
     loop = asyncio.get_event_loop()
@@ -56,6 +62,7 @@ async def fetch_reddit_top(subreddit, headers, max_posts=1000):
                 break
         return posts[:max_posts]
     return await loop.run_in_executor(None, fetch)
+
 async def load_reddit_jokes():
     logging.info("Loading Reddit jokes...")
     unique = defaultdict(list)
@@ -71,6 +78,7 @@ async def load_reddit_jokes():
                 seen.add(k)
     logging.info(f"Loaded {sum(len(x) for x in unique.values())} jokes unique from Reddit.")
     return unique
+
 def run_tts(joke_text, filename, voice, instructions):
     try:
         resp = requests.post(
@@ -98,6 +106,7 @@ def run_tts(joke_text, filename, voice, instructions):
     except Exception as ex:
         logging.error(f"TTS network error: {ex}")
         return False
+
 def run_gpt(query, system_prompt):
     try:
         resp = requests.post(
@@ -123,6 +132,7 @@ def run_gpt(query, system_prompt):
     except Exception as ex:
         logging.error(f"GPT network error: {ex}")
         return "Erreur : impossible de contacter Azure OpenAI."
+
 async def play_audio(interaction, file_path):
     if not os.path.exists(file_path):
         raise FileNotFoundError(f"File {file_path} not found.")
@@ -140,17 +150,21 @@ async def play_audio(interaction, file_path):
         await vc.disconnect()
     except Exception as e:
         raise RuntimeError(f"Erreur pendant la lecture audio : {e}")
+
 async def _delayed_reset_gpt(gid):
     await asyncio.sleep(24 * 3600)
     _guild_gpt_prompt[gid] = DEFAULT_GPT_PROMPT
     _guild_gpt_prompt_reset_task[gid] = None
+
 async def _delayed_reset_sayvc(gid):
     await asyncio.sleep(24 * 3600)
     _guild_sayvc_instructions[gid] = DEFAULT_SAYVC_INSTRUCTIONS
     _guild_sayvc_reset_task[gid] = None
+
 def _cancel_task(task):
     if task and not task.done():
         task.cancel()
+
 @bot.event
 async def on_ready():
     logging.info(f"Bot logged in as {bot.user}!")
@@ -162,14 +176,17 @@ async def on_ready():
         print(e)
     await bot.change_presence(activity=discord.Game(name="Tape /help"))
     preload_jokes_task.start()
+
 @tasks.loop(count=1)
 async def preload_jokes_task():
     global reddit_jokes_by_sub
     await asyncio.sleep(2)
     reddit_jokes_by_sub = await load_reddit_jokes()
+
 @bot.tree.command(name="ping", description="Renvoie Pong ! (test de connexion)")
 async def ping(interaction: discord.Interaction):
     await interaction.response.send_message("Pong !", ephemeral=True)
+
 @bot.tree.command(name="jokeqc", description="Joue une blague québécoise (mp3)")
 async def jokeqc(interaction: discord.Interaction):
     await interaction.response.defer(thinking=True, ephemeral=True)
@@ -182,6 +199,7 @@ async def jokeqc(interaction: discord.Interaction):
         await interaction.followup.send(msg, ephemeral=True)
     else:
         await interaction.followup.send("Lecture audio lancée dans votre salon vocal.", ephemeral=True)
+
 @bot.tree.command(name="joke", description="Joue une blague Reddit en vocal")
 async def joke(interaction: discord.Interaction):
     await interaction.response.defer(thinking=True, ephemeral=True)
@@ -216,6 +234,7 @@ async def joke(interaction: discord.Interaction):
     finally:
         try: os.remove(filename)
         except: pass
+
 @bot.tree.command(name="leave", description="Force le bot à quitter le vocal")
 async def leave(interaction: discord.Interaction):
     await interaction.response.defer(thinking=True, ephemeral=True)
@@ -228,6 +247,7 @@ async def leave(interaction: discord.Interaction):
             await interaction.followup.send("Je quitte le salon vocal.", ephemeral=True)
     else:
         await interaction.followup.send("Le bot n'est pas connecté à un salon vocal sur ce serveur.", ephemeral=True)
+
 @bot.tree.command(name="penis", description="Joue un son spécial !")
 async def penis(interaction: discord.Interaction):
     await interaction.response.defer(thinking=True, ephemeral=True)
@@ -240,10 +260,12 @@ async def penis(interaction: discord.Interaction):
         await interaction.followup.send(msg, ephemeral=True)
     else:
         await interaction.followup.send("Lecture audio lancée dans votre salon vocal.", ephemeral=True)
+
 @bot.tree.command(name="say-tc", description="Fait afficher un texte dans le channel")
 @app_commands.describe(message="Texte à afficher")
 async def say_tc(interaction: discord.Interaction, message: str):
     await interaction.response.send_message(message)
+
 async def say_with_tts(interaction, message, voice, instructions):
     if not (interaction.user.voice and interaction.user.voice.channel):
         await interaction.followup.send("Vous devez être connecté à un salon vocal.", ephemeral=True)
@@ -265,6 +287,7 @@ async def say_with_tts(interaction, message, voice, instructions):
     finally:
         try: os.remove(filename)
         except: pass
+
 @bot.tree.command(
     name="say-vc",
     description="Fait lire du texte en vocal (accent québécois personnalisable)"
@@ -293,6 +316,7 @@ async def say_vc(
     await say_with_tts(interaction, message, "ash", current_instructions)
     if info:
         await interaction.followup.send(info, ephemeral=True)
+
 @bot.tree.command(
     name="gpt",
     description="Pose une question à GPT-4o Azure et lis la réponse en vocal"
@@ -358,6 +382,82 @@ async def gpt(
             try: os.remove(filename)
             except: pass
         await interaction.followup.send("Réponse lue dans le salon vocal.")
+
+@bot.tree.command(
+    name="roast",
+    description="Fais un roast drôle ou trash sur un utilisateur (accent québécois) !"
+)
+@app_commands.describe(
+    cible="L'utilisateur à roaster (mentionne quelqu'un)",
+    intensite="Intensité du roast (1: gentil, 5: aussi méchant que GPT-4o le veut !)"
+)
+async def roast(
+    interaction: discord.Interaction,
+    cible: discord.Member,
+    intensite: int = 2
+):
+    intensite = max(1, min(5, intensite))
+    noms_intensite = {
+        1: "très doux/gentil (taquinerie bon enfant, pas d'insulte)",
+        2: "doux mais moqueur (genre roast sympathique)",
+        3: "taquin et grinçant (poil à gratter, sans jamais être offensant)",
+        4: "très salé mais jamais vraiment blessant (roast de célébrité)",
+        5: "le plus mordant, direct et sarcastique possible, ose les vannes sur tout. Utilise le franc-parler et l'ironie."
+    }
+    username = cible.display_name if hasattr(cible, "display_name") else str(cible)
+    prompt_gpt = (
+        f"Fais un roast dans un style stand-up québécois drôle, roaste la personne suivante : '{username}'. "
+        f"Le niveau de saleté est {intensite}/5 : {noms_intensite[intensite]} "
+        "Utilise fortement des expressions et du vocabulaire québécois, un accent marqué, et un humour direct ou absurde. "
+        "En 3 à 4 phrases maxi. Pas de message d'avertissement ni de début/fin hors roast. Uniquement le roast."
+    )
+
+    titre = f"Roast de {username} (accent québécois, niveau {intensite})"
+
+    await interaction.response.defer(thinking=True) # PUBLIC
+    loop = asyncio.get_running_loop()
+    try:
+        texte = await asyncio.wait_for(
+            loop.run_in_executor(
+                None, run_gpt, prompt_gpt,
+                "Tu es un humoriste stand-up québécois qui fait des roasts au franc-parler, mais tu n'es jamais limite, jamais NSFW, tu respectes les règles de bienveillance Discord."
+            ),
+            timeout=18
+        )
+    except Exception as ex:
+        await interaction.followup.send(
+            f"Erreur lors de la génération du roast : {ex}", ephemeral=True
+        )
+        return
+
+    embed = discord.Embed(title=titre, description=texte, color=0xff8800 if intensite < 5 else 0xff0000)
+    await interaction.followup.send(embed=embed)  # PUBLIC
+
+    if interaction.user.voice and interaction.user.voice.channel:
+        instructions = (
+            "Lis ce roast avec un accent québécois fort et une intonation franche, comme un stand-up marrant qui ne retient pas ses punchlines."
+        )
+        with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as tmp:
+            filename = tmp.name
+        try:
+            success = await asyncio.wait_for(
+                loop.run_in_executor(None, run_tts, texte, filename, "ash", instructions),
+                timeout=20
+            )
+            if success:
+                await asyncio.wait_for(play_audio(interaction, filename), timeout=30)
+        except Exception as e:
+            await interaction.followup.send(f"Erreur audio : {e}", ephemeral=True)
+        finally:
+            try: os.remove(filename)
+            except: pass
+        await interaction.followup.send(
+            "Roast balancé (accent québécois, niveau {}) au vocal !".format(intensite),
+            ephemeral=True)
+    else:
+        await interaction.followup.send(
+            "(Connecte-toi à un salon vocal pour l’entendre !)", ephemeral=True)
+
 @bot.tree.command(name="help", description="Aide sur les commandes du bot")
 async def help(interaction: discord.Interaction):
     embed = discord.Embed(title="Commandes disponibles :", color=0x00bcff)
@@ -370,8 +470,14 @@ async def help(interaction: discord.Interaction):
     embed.add_field(name="/say-tc <texte>", value="Affiche le texte dans le salon textuel", inline=False)
     embed.add_field(name="/say-vc <texte>", value="Lecture vocale accent québécois (instructions personnalisables)", inline=False)
     embed.add_field(name="/gpt <question>", value="Pose une question à GPT-4o (Azure), réponse texte et audio", inline=False)
+    embed.add_field(
+        name="/roast @utilisateur [intensité]",
+        value="Roast public, accent québécois garanti ! 1: gentil à 5: TRÈS MÉCHANT & NSFW (pour adultes !)",
+        inline=False
+    )
     embed.set_footer(text="Tous droits réservés à Jean")
     await interaction.response.send_message(embed=embed, ephemeral=True)
+
 @bot.tree.command(name="reset-prompts", description="Réinitialise immédiatement les prompts et instructions TTS")
 async def reset_prompts(interaction: discord.Interaction):
     await interaction.response.defer(thinking=True, ephemeral=True)
@@ -387,11 +493,13 @@ async def reset_prompts(interaction: discord.Interaction):
         ephemeral=True
     )
     logging.info(f"[{gid}] All prompts/instructions reset by {interaction.user}.")
+
 @bot.event
 async def on_app_command_error(interaction, error):
     try: await interaction.response.send_message(f"Erreur dans la commande : {error}", ephemeral=True)
     except: await interaction.followup.send(f"Erreur dans la commande : {error}", ephemeral=True)
     logging.error(f"Unhandled app command error: {error}")
+
 if __name__ == "__main__":
     print("Starting bot... Jokes will fetch in background.")
     logging.info("Bot starting up. Jokes will fetch in background.")
