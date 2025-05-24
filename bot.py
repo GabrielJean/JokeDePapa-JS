@@ -41,6 +41,10 @@ _guild_gpt_prompt_reset_task = {}
 _guild_sayvc_reset_task = {}
 reddit_jokes_by_sub = defaultdict(list)
 
+# FILE D'ATTENTE PLAY AUDIO PAR SERVEUR ↓↓↓
+_voice_audio_queues = defaultdict(asyncio.Queue)
+_voice_locks = defaultdict(asyncio.Lock)
+
 async def fetch_reddit_top(subreddit, headers, max_posts=1000):
     url = f"https://www.reddit.com/r/{subreddit}/top.json?t=year&limit=1000"
     loop = asyncio.get_event_loop()
@@ -139,17 +143,41 @@ async def play_audio(interaction, file_path):
     user = interaction.user
     if not (user.voice and user.voice.channel):
         raise RuntimeError("Vous devez être connecté à un salon vocal pour exécuter cette commande.")
-    vc = discord.utils.get(bot.voice_clients, guild=interaction.guild)
-    try:
-        if not vc or not vc.is_connected():
-            vc = await user.voice.channel.connect()
-        elif vc.channel != user.voice.channel:
-            await vc.move_to(user.voice.channel)
-        vc.play(discord.FFmpegPCMAudio(file_path))
-        while vc.is_playing(): await asyncio.sleep(1)
-        await vc.disconnect()
-    except Exception as e:
-        raise RuntimeError(f"Erreur pendant la lecture audio : {e}")
+    guild = interaction.guild
+    gid = guild.id if guild else 0
+
+    queue = _voice_audio_queues[gid]
+    lock = _voice_locks[gid]
+    fut = asyncio.get_event_loop().create_future()
+    await queue.put((file_path, fut, user.voice.channel, interaction))
+    if not lock.locked():
+        asyncio.create_task(_run_audio_queue(guild, queue, lock))
+    await fut
+
+async def _run_audio_queue(guild, queue, lock):
+    async with lock:
+        while not queue.empty():
+            file_path, fut, voice_channel, interaction = await queue.get()
+            try:
+                vc = discord.utils.get(bot.voice_clients, guild=guild)
+                if not vc or not vc.is_connected():
+                    vc = await voice_channel.connect()
+                elif vc.channel != voice_channel:
+                    await vc.move_to(voice_channel)
+                vc.play(discord.FFmpegPCMAudio(file_path))
+                while vc.is_playing():
+                    await asyncio.sleep(1)
+                await vc.disconnect()
+                fut.set_result(None)
+            except Exception as e:
+                fut.set_exception(e)
+            finally:
+                # Nettoyage auto fichier temp
+                try:
+                    if file_path.startswith(tempfile.gettempdir()) and os.path.exists(file_path):
+                        os.remove(file_path)
+                except Exception as ex:
+                    logging.warning(f"Erreur suppression fichier temp: {ex}")
 
 async def _delayed_reset_gpt(gid):
     await asyncio.sleep(24 * 3600)
@@ -385,42 +413,46 @@ async def gpt(
 
 @bot.tree.command(
     name="roast",
-    description="Fais un roast drôle ou trash sur un utilisateur (accent québécois) !"
+    description="Fais un roast drôle sur un utilisateur, du plus gentil au plus trash (accent québécois, jamais NSFW) !"
 )
 @app_commands.describe(
     cible="L'utilisateur à roaster (mentionne quelqu'un)",
-    intensite="Intensité du roast (1: gentil, 5: aussi méchant que GPT-4o le veut !)"
+    intensite="Intensité du roast (1: gentil/soft, 5: salé sans méchanceté réelle !)",
+    details="Infos perso/faits/mèmes à exploiter (ex: toujours en retard, adore le fromage, etc.)"
 )
 async def roast(
     interaction: discord.Interaction,
     cible: discord.Member,
-    intensite: int = 2
+    intensite: int = 2,
+    details: str = None
 ):
     intensite = max(1, min(5, intensite))
     noms_intensite = {
-        1: "très doux/gentil (taquinerie bon enfant, pas d'insulte)",
-        2: "doux mais moqueur (genre roast sympathique)",
-        3: "taquin et grinçant (poil à gratter, sans jamais être offensant)",
-        4: "très salé mais jamais vraiment blessant (roast de célébrité)",
-        5: "le plus mordant, direct et sarcastique possible, ose les vannes sur tout. Utilise le franc-parler et l'ironie."
+        1: "très doux/gentil (petite taquinerie bon enfant, aucune insulte)",
+        2: "doux mais moqueur (roast sympathique, plus d'énergie)",
+        3: "taquin et grinçant (roast de bar, du mordant mais pas méchant)",
+        4: "très salé, façon roast américain (humour noir mais jamais blessant)",
+        5: "maximum d'audace, punchlines qui piquent vraiment, humour québécois direct."
     }
     username = cible.display_name if hasattr(cible, "display_name") else str(cible)
+    ajout_details = ""
+    if details:
+        ajout_details = f" Ces détails doivent absolument être exploités dans le roast : {details}"
+
     prompt_gpt = (
-        f"Fais un roast dans un style stand-up québécois drôle, roaste la personne suivante : '{username}'. "
-        f"Le niveau de saleté est {intensite}/5 : {noms_intensite[intensite]} "
-        "Utilise fortement des expressions et du vocabulaire québécois, un accent marqué, et un humour direct ou absurde. "
-        "En 3 à 4 phrases maxi. Pas de message d'avertissement ni de début/fin hors roast. Uniquement le roast."
+        f"Fais un roast dans un style stand-up québécois, roaste la personne suivante : '{username}'. "
+        f"Le niveau d'audace est {intensite}/5 : {noms_intensite[intensite]}. "
+        f"{ajout_details} "
+        "Utilise expressions québécoises, accent, humour absurde ou direct, peu de filtre mais toujours dans les limites du respect Discord (jamais d'attaques sur le sexe/race/genre/etc.). 3 à 4 phrases maximum. Donne UNIQUEMENT le roast, sans aucune explication ni préambule, directement le texte drôle."
     )
-
     titre = f"Roast de {username} (accent québécois, niveau {intensite})"
-
-    await interaction.response.defer(thinking=True) # PUBLIC
+    await interaction.response.defer(thinking=True)
     loop = asyncio.get_running_loop()
     try:
         texte = await asyncio.wait_for(
             loop.run_in_executor(
                 None, run_gpt, prompt_gpt,
-                "Tu es un humoriste stand-up québécois qui fait des roasts au franc-parler, mais tu n'es jamais limite, jamais NSFW, tu respectes les règles de bienveillance Discord."
+                "Tu es un humoriste stand-up québécois, tu fais des roasts du plus soft au plus grinçant, toujours franc-parler et drôle."
             ),
             timeout=18
         )
@@ -429,13 +461,11 @@ async def roast(
             f"Erreur lors de la génération du roast : {ex}", ephemeral=True
         )
         return
-
-    embed = discord.Embed(title=titre, description=texte, color=0xff8800 if intensite < 5 else 0xff0000)
-    await interaction.followup.send(embed=embed)  # PUBLIC
-
+    embed = discord.Embed(title=titre, description=texte, color=0xff8800 if intensite < 4 else 0xff0000)
+    await interaction.followup.send(embed=embed)
     if interaction.user.voice and interaction.user.voice.channel:
         instructions = (
-            "Lis ce roast avec un accent québécois fort et une intonation franche, comme un stand-up marrant qui ne retient pas ses punchlines."
+            "Lis ce roast avec un accent québécois fort et une intonation franche, comme un stand-up qui ne retient pas ses punchlines."
         )
         with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as tmp:
             filename = tmp.name
@@ -458,6 +488,74 @@ async def roast(
         await interaction.followup.send(
             "(Connecte-toi à un salon vocal pour l’entendre !)", ephemeral=True)
 
+@bot.tree.command(
+    name="compliment",
+    description="Fais un compliment personnalisé et drôle (accent québécois) !"
+)
+@app_commands.describe(
+    cible="La personne à complimenter (mentionne quelqu'un)",
+    details="Infos perso à flatter (ex: cuisine, humour, mèmes internes, etc - optionnel)"
+)
+async def compliment(
+    interaction: discord.Interaction,
+    cible: discord.Member,
+    details: str = None
+):
+    username = cible.display_name if hasattr(cible, "display_name") else str(cible)
+    ajout_details = ""
+    if details:
+        ajout_details = f" Focalise le compliment sur ces qualités ou gags : {details}"
+    prompt_gpt = (
+        f"Fais un compliment très original, drôle et unique à '{username}', façon stand-up québécois ou ami exubérant."
+        f"{ajout_details} "
+        "Utilise du vocabulaire québécois, mets de l'énergie et une pointe d'exagération et d'humour. En 3 à 4 phrases maxi. "
+        "N'ajoute pas d'avertissement, ne commence pas par 'Voici' ou 'Hey', donne directement le compliment."
+    )
+    titre = f"Compliment pour {username}"
+
+    await interaction.response.defer(thinking=True)
+    loop = asyncio.get_running_loop()
+    try:
+        texte = await asyncio.wait_for(
+            loop.run_in_executor(
+                None, run_gpt, prompt_gpt,
+                "Tu es un humoriste stand-up québécois, tu balances des compliments uniques, drôles, maxi accent et énergie."
+            ),
+            timeout=18
+        )
+    except Exception as ex:
+        await interaction.followup.send(
+            f"Erreur lors de la génération du compliment : {ex}", ephemeral=True
+        )
+        return
+
+    embed = discord.Embed(title=titre, description=texte, color=0x41d98e)
+    await interaction.followup.send(embed=embed)
+    if interaction.user.voice and interaction.user.voice.channel:
+        instructions = (
+            "Lis ce compliment comme un stand-up québécois, accent fort, chaleureux, avec beaucoup d'énergie et d'humour."
+        )
+        with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as tmp:
+            filename = tmp.name
+        try:
+            success = await asyncio.wait_for(
+                loop.run_in_executor(None, run_tts, texte, filename, "ash", instructions),
+                timeout=20
+            )
+            if success:
+                await asyncio.wait_for(play_audio(interaction, filename), timeout=30)
+        except Exception as e:
+            await interaction.followup.send(f"Erreur audio : {e}", ephemeral=True)
+        finally:
+            try: os.remove(filename)
+            except: pass
+        await interaction.followup.send(
+            "Compliment lancé au vocal (accent québécois) !",
+            ephemeral=True)
+    else:
+        await interaction.followup.send(
+            "(Connecte-toi à un salon vocal pour l’entendre !)", ephemeral=True)
+
 @bot.tree.command(name="help", description="Aide sur les commandes du bot")
 async def help(interaction: discord.Interaction):
     embed = discord.Embed(title="Commandes disponibles :", color=0x00bcff)
@@ -471,8 +569,13 @@ async def help(interaction: discord.Interaction):
     embed.add_field(name="/say-vc <texte>", value="Lecture vocale accent québécois (instructions personnalisables)", inline=False)
     embed.add_field(name="/gpt <question>", value="Pose une question à GPT-4o (Azure), réponse texte et audio", inline=False)
     embed.add_field(
-        name="/roast @utilisateur [intensité]",
-        value="Roast public, accent québécois garanti ! 1: gentil à 5: TRÈS MÉCHANT & NSFW (pour adultes !)",
+        name="/roast @utilisateur [intensité] [details]",
+        value="Roast public, accent québécois garanti ! 1: gentil, 5: punchlines acérées autorisées mais jamais NSFW.",
+        inline=False
+    )
+    embed.add_field(
+        name="/compliment @utilisateur [details]",
+        value="Compliment public, drôle et affectueux, accent québécois inclus ! Option [details] pour cibler un talent: /compliment @julie 'championne du karaoke'",
         inline=False
     )
     embed.set_footer(text="Tous droits réservés à Jean")
